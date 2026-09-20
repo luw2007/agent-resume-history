@@ -1,0 +1,57 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shell prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bash fish python3 zsh
+
+      - name: Install shell prerequisites (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bash fish python@3 zsh
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.22
+
+      - name: Report prerequisite versions
+        run: |
+          bash --version | sed -n '1p'
+          zsh --version
+          fish --version
+          python3 --version
+          bun --version
+
+      - name: Recorder suite
+        run: |
+          sh tests/recorder-test.sh
+          bash tests/recorder-test.sh
+          zsh tests/recorder-test.sh
+
+      - name: Adapter suite
+        run: ./tests/adapters-test.sh
+
+      - name: Shell and installer suite
+        run: ./tests/shell-test.sh
+
+      - name: Isolated end-to-end suite
+        run: ./tests/e2e-test.sh

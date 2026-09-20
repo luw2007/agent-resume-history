@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Test and coverage output
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Local environments and editor files
+.env
+.env.*
+!.env.example
+.venv/
+.DS_Store
+*.swp
+*~

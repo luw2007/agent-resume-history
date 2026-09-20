@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${AHR_HOME:-$HOME/.local/share/agent-resume-history}/bin/agent-resume-history-hook\" 2>/dev/null || :",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

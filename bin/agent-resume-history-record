@@ -1,0 +1,122 @@
+#!/bin/sh
+# agent-resume-history-record
+# Usage:
+#   agent-resume-history-record <marker_path> <uuid>
+#   agent-resume-history-record <uuid>  (uses $AHR_RUN_FILE)
+#   agent-resume-history-record <marker_path> -  (reads uuid from stdin)
+
+set -eu
+
+# Locate lib
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+lib_file=""
+if [ -f "$self_dir/../lib/agent-resume-history.sh" ]; then
+    lib_file="$self_dir/../lib/agent-resume-history.sh"
+elif [ -f "$self_dir/agent-resume-history.sh" ]; then
+    lib_file="$self_dir/agent-resume-history.sh"
+elif [ -f "/usr/local/lib/agent-resume-history.sh" ]; then
+    lib_file="/usr/local/lib/agent-resume-history.sh"
+fi
+
+if [ -n "$lib_file" ] && [ -f "$lib_file" ]; then
+    # shellcheck source=/dev/null
+    . "$lib_file"
+else
+    # Fallback minimal helpers if lib not found
+    ahr_canonical_uuid() {
+        nl='
+'
+        case "${1:-}" in
+            *"$nl"*) return 1 ;;
+        esac
+        case "${1:-}" in
+            [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])
+                printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]'
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    }
+
+    ahr_validate_marker() {
+        m="${1:-}"
+        [ -n "$m" ] || return 1
+        case "$m" in /*) ;; *) return 1 ;; esac
+        [ -f "$m" ] || return 1
+        [ ! -L "$m" ] || return 1
+        [ -w "$m" ] || return 1
+        if ! [ -O "$m" ] 2>/dev/null; then
+            c_uid=$(id -u 2>/dev/null || :)
+            f_uid=$(stat -f "%u" "$m" 2>/dev/null || stat -c "%u" "$m" 2>/dev/null || :)
+            [ -n "$c_uid" ] && [ "$c_uid" = "$f_uid" ] || return 1
+        fi
+        f_perm=$(stat -f "%Lp" "$m" 2>/dev/null || stat -c "%a" "$m" 2>/dev/null || :)
+        case "$f_perm" in
+            600|0600) ;;
+            *) return 1 ;;
+        esac
+        return 0
+    }
+fi
+
+marker=""
+raw_id=""
+
+if [ $# -eq 2 ]; then
+    marker="$1"
+    raw_id="$2"
+elif [ $# -eq 1 ]; then
+    if [ -n "${AHR_RUN_FILE:-}" ]; then
+        marker="$AHR_RUN_FILE"
+        raw_id="$1"
+    else
+        printf 'agent-resume-history-record: missing marker path (AHR_RUN_FILE not set)\n' >&2
+        exit 1
+    fi
+else
+    printf 'Usage: agent-resume-history-record <marker_path> <uuid>\n' >&2
+    exit 1
+fi
+
+if [ "$raw_id" = "-" ]; then
+    read -r raw_id || raw_id=""
+fi
+
+# Validate and canonicalize UUID
+canon_id=""
+if ! canon_id=$(ahr_canonical_uuid "$raw_id"); then
+    printf 'agent-resume-history-record: invalid or non-canonical UUID: rejected\n' >&2
+    exit 2
+fi
+
+# Validate marker target
+if ! ahr_validate_marker "$marker"; then
+    printf 'agent-resume-history-record: invalid, missing, or unsafe marker target: %s\n' "$marker" >&2
+    exit 3
+fi
+
+# Atomic write using temporary file in the same directory as marker
+marker_dir=$(dirname -- "$marker")
+old_umask=$(umask)
+umask 077
+tmp_file=$(mktemp "$marker_dir/.ahr_tmp_XXXXXX" 2>/dev/null) || {
+    umask "$old_umask"
+    printf 'agent-resume-history-record: failed to create temporary file in %s\n' "$marker_dir" >&2
+    exit 4
+}
+umask "$old_umask"
+chmod 600 "$tmp_file" 2>/dev/null || :
+
+# Write canonical UUID with trailing newline
+printf '%s\n' "$canon_id" > "$tmp_file"
+
+# Atomically replace marker
+if ! mv -f "$tmp_file" "$marker" 2>/dev/null; then
+    rm -f "$tmp_file" 2>/dev/null || :
+    printf 'agent-resume-history-record: atomic update failed for %s\n' "$marker" >&2
+    exit 5
+fi
+
+exit 0
