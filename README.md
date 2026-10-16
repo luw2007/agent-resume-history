@@ -186,6 +186,10 @@ Run `/hooks`, review and approve the AHR hook, then start a new session. `--veri
 
 AHR requires an interactive shell and a fresh interactive agent run. Explicit resume, continue, fork, help, version, and print/non-interactive commands are intentionally excluded.
 
+### Linux: exiting the agent records nothing and the marker is never cleaned up
+
+On Linux (GNU coreutils), `stat -f "%Lp"` is not a format option: it fails but still prints file-system information to stdout. Earlier releases concatenated that output with the `stat -c` fallback result, so a valid `0600` marker failed permission validation and was neither recorded nor removed. Marker validation now discards the output of any failing `stat` probe, so BSD/macOS and GNU/Linux both accept owner-only (`0600`) markers and still reject any other mode. Update to the fixed release; stale empty markers in the AHR runtime directory can be deleted manually.
+
 ## Uninstall
 
 From the checked-out release tree, with the same `AHR_HOME` used to install:

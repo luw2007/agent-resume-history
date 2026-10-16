@@ -49,10 +49,12 @@ else
         [ -w "$m" ] || return 1
         if ! [ -O "$m" ] 2>/dev/null; then
             c_uid=$(id -u 2>/dev/null || :)
-            f_uid=$(stat -f "%u" "$m" 2>/dev/null || stat -c "%u" "$m" 2>/dev/null || :)
+            # Guarded: GNU stat fails BSD's -f format with stdout noise, so a
+            # failing probe must never feed its output into the captured value.
+            f_uid=$(stat -f "%u" "$m" 2>/dev/null) || f_uid=$(stat -c "%u" "$m" 2>/dev/null) || f_uid=""
             [ -n "$c_uid" ] && [ "$c_uid" = "$f_uid" ] || return 1
         fi
-        f_perm=$(stat -f "%Lp" "$m" 2>/dev/null || stat -c "%a" "$m" 2>/dev/null || :)
+        f_perm=$(stat -f "%Lp" "$m" 2>/dev/null) || f_perm=$(stat -c "%a" "$m" 2>/dev/null) || f_perm=""
         case "$f_perm" in
             600|0600) ;;
             *) return 1 ;;

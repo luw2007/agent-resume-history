@@ -76,14 +76,17 @@ ahr_validate_marker() {
     # Check ownership: must be owned by current user
     if ! [ -O "$m" ] 2>/dev/null; then
         cur_uid=$(id -u 2>/dev/null || :)
-        file_uid=$(stat -f "%u" "$m" 2>/dev/null || stat -c "%u" "$m" 2>/dev/null || :)
+        # GNU stat rejects BSD's -f format by writing file-system information to
+        # stdout and exiting non-zero, so every probe is guarded: a failing probe
+        # must never contribute its stdout to the captured value.
+        file_uid=$(stat -f "%u" "$m" 2>/dev/null) || file_uid=$(stat -c "%u" "$m" 2>/dev/null) || file_uid=""
         if [ -z "$cur_uid" ] || [ -z "$file_uid" ] || [ "$cur_uid" != "$file_uid" ]; then
             return 1
         fi
     fi
 
     # Check permissions: owner read/write (0600), no group/other permissions
-    file_perm=$(stat -f "%Lp" "$m" 2>/dev/null || stat -c "%a" "$m" 2>/dev/null || :)
+    file_perm=$(stat -f "%Lp" "$m" 2>/dev/null) || file_perm=$(stat -c "%a" "$m" 2>/dev/null) || file_perm=""
     case "$file_perm" in
         600|0600) ;;
         *) return 1 ;;

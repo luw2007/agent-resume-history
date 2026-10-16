@@ -83,7 +83,10 @@ case "$marker_path" in
     *) assert_status 0 1 "Marker path must be absolute" ;;
 esac
 
-perm=$(stat -f "%Lp" "$marker_path" 2>/dev/null || stat -c "%a" "$marker_path" 2>/dev/null)
+# Guarded: GNU stat rejects BSD's -f format by writing filesystem information to
+# stdout and exiting non-zero, so each probe is guarded to keep that stdout out
+# of the captured value.
+perm=$(stat -f "%Lp" "$marker_path" 2>/dev/null) || perm=$(stat -c "%a" "$marker_path" 2>/dev/null) || perm=""
 assert_eq "600" "$perm" "Marker file permissions 0600"
 
 echo "=== Test 4: Record valid UUID (two arguments) ==="
@@ -166,9 +169,85 @@ printf '%s\n' "$uuid_lower" | "$RECORD_BIN" "$marker5" -
 assert_eq "$uuid_lower" "$(cat "$marker5")" "Record via stdin '-' succeeds"
 rm -f "$marker5"
 
-echo "=== Test 10: Old unpublished alias is absent ==="
-[ ! -e "$ROOT_DIR/bin/ahr-record" ]
-assert_status 0 $? "Obsolete bin/ahr-record alias removed"
+echo "=== Test 10: GNU-style failing 'stat -f' with stdout noise ==="
+# Simulates GNU stat on any host: 'stat -f FMT FILE' prints file-system
+# information to stdout and exits 1; 'stat -c' behaves like GNU stat.
+REAL_STAT=$(command -v stat)
+FAKE_BIN="$TMP_TEST_DIR/fake_bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/stat" <<EOF
+#!/bin/sh
+REAL_STAT="$REAL_STAT"
+case "\${1:-}" in
+    -f)
+        printf '  File: "%s"\n    ID: 0 Namelen: 255 Type: ext2/ext3\n' "\${3:-}"
+        exit 1
+        ;;
+    -c)
+        fmt="\$2"
+        shift 2
+        if "\$REAL_STAT" -c "\$fmt" "\$@" 2>/dev/null; then
+            exit 0
+        fi
+        case "\$fmt" in
+            %a) bsd_fmt='%Lp' ;;
+            %u) bsd_fmt='%u' ;;
+            *) exit 1 ;;
+        esac
+        exec "\$REAL_STAT" -f "\$bsd_fmt" "\$@"
+        ;;
+esac
+exec "\$REAL_STAT" "\$@"
+EOF
+chmod 755 "$FAKE_BIN/stat"
+ORIG_PATH=$PATH
+PATH="$FAKE_BIN:$PATH"
+
+gnu_marker=$(ahr_create_marker)
+chmod 600 "$gnu_marker"
+set +e
+ahr_validate_marker "$gnu_marker"
+assert_status 0 $? "GNU-style stat: valid 0600 marker accepted"
+
+"$RECORD_BIN" "$gnu_marker" "$uuid_upper" 2>/dev/null
+assert_status 0 $? "GNU-style stat: record into 0600 marker succeeds"
+assert_eq "$uuid_lower" "$(cat "$gnu_marker")" "GNU-style stat: marker holds canonical UUID"
+
+gnu_read=$(ahr_read_and_remove_marker "$gnu_marker" 2>/dev/null)
+assert_status 0 $? "GNU-style stat: read of 0600 marker succeeds"
+assert_eq "$uuid_lower" "$gnu_read" "GNU-style stat: read returns canonical UUID"
+[ ! -e "$gnu_marker" ]
+assert_status 0 $? "GNU-style stat: marker deleted after read"
+
+# Standalone recorder copy exercises the built-in fallback validator
+solo_dir="$TMP_TEST_DIR/solo/bin"
+mkdir -p "$solo_dir"
+cp "$RECORD_BIN" "$solo_dir/agent-resume-history-record"
+chmod 755 "$solo_dir/agent-resume-history-record"
+solo_marker=$(ahr_create_marker)
+chmod 600 "$solo_marker"
+"$solo_dir/agent-resume-history-record" "$solo_marker" "$uuid_lower" 2>/dev/null
+assert_status 0 $? "GNU-style stat: fallback recorder accepts 0600 marker"
+assert_eq "$uuid_lower" "$(cat "$solo_marker")" "GNU-style stat: fallback recorder wrote UUID"
+rm -f "$solo_marker"
+
+# Unsafe permissions must still be rejected
+for bad_mode in 644 666 640 400; do
+    bad_marker=$(ahr_create_marker)
+    chmod "$bad_mode" "$bad_marker"
+    ahr_validate_marker "$bad_marker"
+    assert_status 1 $? "GNU-style stat: validate rejects mode $bad_mode"
+    ahr_read_and_remove_marker "$bad_marker" >/dev/null 2>&1
+    assert_status 1 $? "GNU-style stat: read rejects mode $bad_mode"
+    "$RECORD_BIN" "$bad_marker" "$uuid_lower" 2>/dev/null
+    assert_status 3 $? "GNU-style stat: record rejects mode $bad_mode"
+    "$solo_dir/agent-resume-history-record" "$bad_marker" "$uuid_lower" 2>/dev/null
+    assert_status 3 $? "GNU-style stat: fallback recorder rejects mode $bad_mode"
+    chmod 600 "$bad_marker"
+    rm -f "$bad_marker"
+done
+set -e
+PATH=$ORIG_PATH
 
 echo ""
 echo "=== Test Summary ==="
